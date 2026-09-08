@@ -1,0 +1,23 @@
+# --- API ---
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+python-multipart==0.0.20
+pydantic==2.10.4
+
+# --- data tier (SQLite by default; set DATABASE_URL for PostgreSQL) ---
+sqlalchemy==2.0.36
+# psycopg[binary]==3.2.3        # uncomment for PostgreSQL
+# redis==5.2.1                  # uncomment to back the semantic cache with Redis
+
+# --- vision + OCR ---
+numpy>=2.0
+opencv-python-headless>=4.10
+pillow>=11.0
+rapidocr>=3.0          # ONNX OCR, bundled models, no system binary
+onnxruntime>=1.20
+
+# --- optional: LLM narrative layer ---
+# Without a key the pipeline uses the deterministic rule engine for reasoning.
+anthropic>=0.40
+
+httpx>=0.28

@@ -1,0 +1,33 @@
+# python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+# node
+node_modules/
+.next/
+out/
+# env
+.env
+.env.local
+# data
+backend/uploads/*
+!backend/uploads/.gitkeep
+*.db
+*.sqlite3
+# os
+.DS_Store
+Thumbs.db
+
+# next.js build output
+frontend/.next/
+frontend/out/
+frontend/next-env.d.ts
+# generated sample labels
+backend/samples/
+
+# SIH submission documents - kept local, this repo is public
+SIHPPT.pdf
+SIHProgress.pdf
+*.pdf

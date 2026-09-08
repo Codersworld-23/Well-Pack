@@ -1,0 +1,188 @@
+@import "tailwindcss";
+
+:root {
+  --background: #f6f7f9;
+  --surface: #ffffff;
+  --surface-2: #f0f2f5;
+  --foreground: #10151f;
+  --muted: #5b6678;
+  --border: #dfe3ea;
+
+  --brand: #0b3d68;
+  --brand-fg: #ffffff;
+  --accent: #d4741a;
+
+  --pass: #0f7a4d;
+  --pass-bg: #e7f5ee;
+  --warn: #a76a08;
+  --warn-bg: #fdf3e2;
+  --fail: #b3261e;
+  --fail-bg: #fdeceb;
+  --review: #4a5568;
+  --review-bg: #eef0f4;
+
+  --chart-1: #2f6fb0;
+  --chart-grid: #e6e9ef;
+  --chart-ink: #5b6678;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: #0c1017;
+    --surface: #141a24;
+    --surface-2: #1b2331;
+    --foreground: #e8ecf2;
+    --muted: #96a1b3;
+    --border: #26303f;
+
+    --brand: #3f8fd0;
+    --brand-fg: #05121e;
+    --accent: #e9963f;
+
+    --pass: #4cc38a;
+    --pass-bg: #12281f;
+    --warn: #e3a44c;
+    --warn-bg: #2b2113;
+    --fail: #f2726a;
+    --fail-bg: #2d1615;
+    --review: #9aa5b6;
+    --review-bg: #1c232f;
+
+    --chart-1: #4f9ae0;
+    --chart-grid: #232c3a;
+    --chart-ink: #96a1b3;
+  }
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-foreground: var(--foreground);
+  --color-muted: var(--muted);
+  --color-line: var(--border);
+  --color-brand: var(--brand);
+  --color-brand-fg: var(--brand-fg);
+  --color-accent: var(--accent);
+  --color-pass: var(--pass);
+  --color-pass-bg: var(--pass-bg);
+  --color-warn: var(--warn);
+  --color-warn-bg: var(--warn-bg);
+  --color-fail: var(--fail);
+  --color-fail-bg: var(--fail-bg);
+  --color-review: var(--review);
+  --color-review-bg: var(--review-bg);
+}
+
+* {
+  border-color: var(--border);
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: ui-sans-serif, system-ui, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* --- primitives ------------------------------------------------------- */
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 0.75rem;
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  border-radius: 0.5rem;
+  padding: 0.55rem 1rem;
+  font-size: 0.875rem;
+  font-weight: 600;
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: filter 0.15s ease, background 0.15s ease;
+}
+.btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.btn-primary {
+  background: var(--brand);
+  color: var(--brand-fg);
+}
+.btn-primary:hover:not(:disabled) {
+  filter: brightness(1.12);
+}
+.btn-ghost {
+  background: var(--surface);
+  color: var(--foreground);
+  border-color: var(--border);
+}
+.btn-ghost:hover:not(:disabled) {
+  background: var(--surface-2);
+}
+.btn-danger {
+  background: var(--fail-bg);
+  color: var(--fail);
+  border-color: color-mix(in srgb, var(--fail) 30%, transparent);
+}
+
+.input {
+  width: 100%;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  padding: 0.55rem 0.75rem;
+  font-size: 0.875rem;
+  color: var(--foreground);
+}
+.input:focus {
+  outline: 2px solid color-mix(in srgb, var(--brand) 45%, transparent);
+  outline-offset: -1px;
+}
+
+.label {
+  display: block;
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: 0.35rem;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  border-radius: 999px;
+  padding: 0.2rem 0.6rem;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+.chip-pass { background: var(--pass-bg); color: var(--pass); }
+.chip-warn { background: var(--warn-bg); color: var(--warn); }
+.chip-fail { background: var(--fail-bg); color: var(--fail); }
+.chip-review { background: var(--review-bg); color: var(--review); }
+.chip-neutral { background: var(--surface-2); color: var(--muted); }
+
+.tone-pass { color: var(--pass); }
+.tone-warn { color: var(--warn); }
+.tone-fail { color: var(--fail); }
+.tone-review { color: var(--review); }
+
+.scroll-x {
+  overflow-x: auto;
+}
+
+@keyframes pulse-soft {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
+}
+.pulsing { animation: pulse-soft 1.4s ease-in-out infinite; }
