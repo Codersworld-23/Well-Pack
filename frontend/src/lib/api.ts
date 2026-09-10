@@ -43,6 +43,11 @@ export interface PhysicalAnalysis {
     background_color?: number[];
   }[];
   text_regions?: number;
+  orb_keypoints?: number;
+  feature_richness?: string;
+  uncertain_regions?: string[];
+  uncertain_region_count?: number;
+  ocr_preprocessed?: boolean;
   quality_ok?: boolean;
   quality_message?: string | null;
 }
@@ -54,19 +59,38 @@ export interface ScanResult {
   verdict: Verdict | null;
   compliance_score: number;
   confidence: number;
+  ocr_confidence: number;
   hallucination_coefficient: number;
+  hallucination_breakdown?: {
+    citation_drift?: number;
+    finding_drift?: number;
+    entity_drift?: number;
+    penalty_drift?: number;
+    confidence_drift?: number;
+    ocr_grounding_score?: number;
+    clause_alignment_score?: number;
+  };
   product_name: string | null;
   extracted_fields: Record<string, unknown>;
-  physical_analysis: PhysicalAnalysis;
+  physical_analysis: PhysicalAnalysis & {
+    feature_richness?: string;
+    uncertain_regions?: string[];
+    uncertain_region_count?: number;
+    ocr_preprocessed?: boolean;
+  };
   violations: Violation[];
+  checks: { name: string; passed: boolean; clause_id: string; rule_number: string; detail: string }[];
+  skipped_checks: { name: string; clause_id: string; reason: string }[];
   citations: Citation[];
   ocr_text: string | null;
   reasoning: string | null;
+  analyst_note: string | null;
   cache_hit: boolean;
   engine: string | null;
   latency_ms: number;
   image_url: string | null;
   source: string;
+  rule_corpus_version?: number;
 }
 
 export interface ScanSummary {
@@ -211,6 +235,18 @@ export const api = {
   rescan: (id: string) => request<ScanResult>(`/api/scans/${id}/rescan`, { method: "POST" }),
 
   deleteScan: (id: string) => request<void>(`/api/scans/${id}`, { method: "DELETE" }),
+
+  compareLabels: (reference: File, target: File) => {
+    const body = new FormData();
+    body.append("reference", reference);
+    body.append("target", target);
+    return request<{
+      orb: { keypoints_ref: number; keypoints_target: number; matches: number; match_ratio: number; similarity: number; verdict: string };
+      ssim: { score: number; verdict: string };
+      combined_verdict: string;
+      combined_confidence: number;
+    }>("/api/scans/compare", { method: "POST", body });
+  },
 
   listRules: () => request<RuleClause[]>("/api/rules"),
 

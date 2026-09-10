@@ -41,7 +41,10 @@ def _persist(db: Session, scan: Scan, result: dict) -> Scan:
     scan.hallucination_coefficient = result["hallucination_coefficient"]
     scan.product_name = result.get("product_name")
     scan.extracted_fields = result["extracted_fields"]
-    scan.physical_analysis = result["physical_analysis"]
+    scan.physical_analysis = {
+        **result["physical_analysis"],
+        "hallucination_breakdown": result.get("hallucination_breakdown", {}),
+    }
     scan.violations = result["violations"]
     scan.citations = result["citations"]
     scan.ocr_text = result["ocr_text"]
@@ -104,6 +107,39 @@ async def precheck(file: UploadFile = File(...)):
     finally:
         path.unlink(missing_ok=True)
     return quality
+
+
+@router.post("/compare")
+async def compare_labels(
+    reference: UploadFile = File(..., description="The known-good / reference label image"),
+    target: UploadFile = File(..., description="The label to verify against the reference"),
+):
+    """ORB feature matching + SSIM structural similarity comparison.
+
+    Upload two label images to detect counterfeiting or tampering:
+      * `combined_verdict == 'authentic'`  → labels are structurally identical
+      * `combined_verdict == 'suspicious'` → mixed signals, warrant inspection
+      * `combined_verdict == 'different'`  → labels do not match
+
+    This endpoint does not run the compliance pipeline — it only compares the
+    two images as visual artefacts. Use it when you suspect a product's label
+    has been reprinted, altered, or is counterfeit.
+    """
+    for f in (reference, target):
+        if f.content_type not in ALLOWED_TYPES:
+            raise HTTPException(415, f"Unsupported image type: {f.content_type}")
+
+    ref_path = _save_upload(reference)
+    tgt_path = _save_upload(target)
+    try:
+        ref_img = vision.load_image(str(ref_path))
+        tgt_img = vision.load_image(str(tgt_path))
+        result = vision.compare_labels(ref_img, tgt_img)
+    finally:
+        ref_path.unlink(missing_ok=True)
+        tgt_path.unlink(missing_ok=True)
+
+    return result
 
 
 @router.get("", response_model=list[ScanSummary])

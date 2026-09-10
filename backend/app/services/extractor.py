@@ -77,9 +77,25 @@ ORIGIN_RE = re.compile(
 )
 
 MANUFACTURER_RE = re.compile(
-    r"(?:manufactured\s*(?:&\s*packed\s*)?by|mfd\.?\s*by|packed\s*by|marketed\s*by|"
-    r"imported\s*by|manufacturer)\s*[:\-]?\s*(.{4,120})",
+    r"(?:manufactured\s*(?:&\s*packed\s*)?by|m[fd]{1,2}\.?\s*by|md\.?\s*by|pkd\.?\s*by|packed\s*by|"
+    r"marketed\s*by|mkt\.?\s*by|imported\s*by|manufacturer)\s*[:\-]?\s*(.{4,120})",
     re.IGNORECASE,
+)
+
+COMPANY_FALLBACK_RE = re.compile(
+    r"([A-Za-z0-9\s&.,-]{3,50}(?:Pvt\.?\s*Ltd\.?|Ltd\.?|Limited|Agro|Industries|Beverages))",
+    re.IGNORECASE,
+)
+
+POINTER_RE = re.compile(
+    r"(?:for\s*mfg|formfg|for\s*m\.?r\.?p|formrp|see\s*top|seetop|see\s*neck|seeneck|"
+    r"see\s*crown|seecrown|see\s*bottom|seebottom|see\s*cap|seecap|see\s*below|seebelow|"
+    r"see\s*panel|seepanel)",
+    re.IGNORECASE,
+)
+
+DATE_TOKEN_RE = re.compile(
+    r"\b((?:\d{1,2}[/\-.])?(?:\d{1,2}|[A-Za-z]{3,9})[/\-.]\d{2,4})\b"
 )
 
 CONSUMER_CARE_RE = re.compile(
@@ -161,9 +177,26 @@ def extract_fields(text: str, regions: list[dict[str, Any]] | None = None) -> di
     if mfg:
         fields["manufacture_date"] = _parse_month_year(mfg.group(1))
         fields["manufacture_date_raw"] = _clean(mfg.group(0))
+    else:
+        # Windowed fallback: search near date keywords if columns got interleaved
+        for m in re.finditer(r"\b(?:mfg|mfd|packed|pkd|manufactured)\b", single, re.I):
+            window = single[m.start(): m.start() + 80]
+            date_match = DATE_TOKEN_RE.search(window)
+            if date_match:
+                fields["manufacture_date"] = _parse_month_year(date_match.group(1))
+                fields["manufacture_date_raw"] = _clean(date_match.group(0))
+                break
+
     expiry = EXPIRY_RE.search(single)
     if expiry:
         fields["expiry_date"] = _clean(expiry.group(1))
+    else:
+        for m in re.finditer(r"\b(?:exp|use\s*by|best\s*before|expiry|bb)\b", single, re.I):
+            window = single[m.start(): m.start() + 80]
+            date_match = DATE_TOKEN_RE.search(window)
+            if date_match:
+                fields["expiry_date"] = _clean(date_match.group(0))
+                break
 
     # --- manufacturer / packer (Rule 6(1)(a)) ---------------------------
     manufacturer = MANUFACTURER_RE.search(flat)
@@ -173,7 +206,13 @@ def extract_fields(text: str, regions: list[dict[str, Any]] | None = None) -> di
         block = flat[manufacturer.start(): manufacturer.start() + 300]
         fields["manufacturer_has_pin"] = bool(PIN_RE.search(block))
     else:
-        fields["manufacturer_has_pin"] = bool(PIN_RE.search(single))
+        fallback = COMPANY_FALLBACK_RE.search(flat)
+        if fallback:
+            fields["manufacturer"] = _clean(fallback.group(1))[:120]
+            block = flat[fallback.start(): fallback.start() + 300]
+            fields["manufacturer_has_pin"] = bool(PIN_RE.search(block))
+        else:
+            fields["manufacturer_has_pin"] = bool(PIN_RE.search(single))
 
     # --- consumer care (Rule 6(1)(f)) -----------------------------------
     care = CONSUMER_CARE_RE.search(flat)
@@ -201,7 +240,14 @@ def extract_fields(text: str, regions: list[dict[str, Any]] | None = None) -> di
         fields["fssai_licence"] = fssai.group(1)
     batch = BATCH_RE.search(single)
     if batch:
-        fields["batch_number"] = _clean(batch.group(1))
+        raw_b = _clean(batch.group(1))
+        if not re.search(r"^(?:and|see|top|for|mrp|tax|date|exp)", raw_b, re.I):
+            fields["batch_number"] = raw_b
+
+    # --- statutory pointer clauses (Rules 6(1)(d) & 6(1)(e) provisos) ---
+    pointers = POINTER_RE.findall(single)
+    if pointers:
+        fields["pointer_declarations"] = [_clean(p) for p in pointers]
 
     fields["commodity_name"] = _guess_commodity_name(regions or [], text)
     fields["mrp_occurrences"] = len(MRP_RE.findall(single))
@@ -210,12 +256,16 @@ def extract_fields(text: str, regions: list[dict[str, Any]] | None = None) -> di
         "non_metric_units": fields.get("non_metric_units", []),
         "consumer_care_has_contact": fields.get("consumer_care_has_contact", False),
         "manufacturer_has_pin": fields.get("manufacturer_has_pin", False),
+        "pointer_declarations": fields.get("pointer_declarations", []),
     }
 
 
 NOISE_TOKENS = re.compile(
-    r"mrp|rs\.?|net|wt|weight|qty|quantity|mfg|exp|batch|fssai|www|http|"
-    r"inclusive|taxes|manufactured|packed|marketed|customer|consumer|care|\d",
+    r"mrp|rs\.?|net|wt|weight|qty|quantity|mfg|exp|batch|fssai|fssat|licno|lic|licence|www|http|"
+    r"inclusive|taxes|manufactured|packed|marketed|customer|consumer|care|\d|"
+    r"pvt|ltd|limited|agro|foods|industries|beverages|india|co\b|corp|llp|inc|"
+    r"street|road|highway|andheri|meerut|varanasi|mumbai|delhi|bangalore|pune|rajasthan|"
+    r"licence|license|lic\s*no|read\s*first|see\s*below|for\s*manuf|ingredients|nutrition",
     re.IGNORECASE,
 )
 

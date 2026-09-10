@@ -57,6 +57,11 @@ class PhysicalAnalysis(BaseModel):
     min_contrast_ratio: float = 0.0
     low_contrast_declarations: list[dict[str, Any]] = Field(default_factory=list)
     text_regions: int = 0
+    orb_keypoints: int = 0
+    feature_richness: str = "unknown"
+    uncertain_regions: list[str] = Field(default_factory=list)
+    uncertain_region_count: int = 0
+    ocr_preprocessed: bool = False
     quality_ok: bool = True
     quality_message: str | None = None
 
@@ -70,19 +75,25 @@ class ScanResult(BaseModel):
     verdict: str | None = None
     compliance_score: float = 0.0
     confidence: float = 0.0
+    ocr_confidence: float = 0.0
     hallucination_coefficient: float = 0.0
+    hallucination_breakdown: dict[str, float] = Field(default_factory=dict)
     product_name: str | None = None
     extracted_fields: dict[str, Any] = Field(default_factory=dict)
     physical_analysis: dict[str, Any] = Field(default_factory=dict)
     violations: list[dict[str, Any]] = Field(default_factory=list)
+    checks: list[dict[str, Any]] = Field(default_factory=list)
+    skipped_checks: list[dict[str, Any]] = Field(default_factory=list)
     citations: list[dict[str, Any]] = Field(default_factory=list)
     ocr_text: str | None = None
     reasoning: str | None = None
+    analyst_note: str | None = None
     cache_hit: bool = False
     engine: str | None = None
     latency_ms: int = 0
     image_url: str | None = None
     source: str = "consumer"
+    rule_corpus_version: int | None = None
 
 
 class ScanSummary(BaseModel):

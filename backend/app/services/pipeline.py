@@ -1,13 +1,21 @@
 """Scan-to-verdict orchestration.
 
-    ingest -> quality gate -> OCR -> extraction -> physical analysis
+    ingest -> quality gate -> label-region crop -> OCR (with preprocessing)
+           -> extraction -> physical analysis
            -> semantic cache -> RAG retrieval -> rule engine -> LLM narrative
            -> verdict, cached and logged
+
+Enhanced:
+  * label region auto-crop before OCR
+  * OCR preprocessing (CLAHE, denoising, deskew)
+  * uncertain_regions tracking fed to rule engine
+  * ocr_grounding_score and clause_alignment_score added to result
 """
 
 from __future__ import annotations
 
 import logging
+import re
 import time
 from typing import Any
 
@@ -27,8 +35,14 @@ def run(image_path: str, *, db, use_cache: bool = True) -> dict[str, Any]:
     image = vision.load_image(image_path)
     quality = vision.capture_quality(image)
 
+    # Auto-crop to label region (best-effort; falls back to full image).
+    try:
+        label_image = vision.detect_label_region(image)
+    except Exception:
+        label_image = image
+
     # 2. OCR ----------------------------------------------------------------
-    ocr_result = ocr.extract(image)
+    ocr_result = ocr.extract(label_image, preprocess=True)
     text = ocr_result["text"]
 
     if not text.strip():
@@ -47,8 +61,11 @@ def run(image_path: str, *, db, use_cache: bool = True) -> dict[str, Any]:
 
     # 4. Extraction + physical analysis --------------------------------------
     fields = extractor.extract_fields(text, ocr_result["regions"])
-    physical = vision.analyse(image, ocr_result["regions"])
+    physical = vision.analyse(label_image, ocr_result["regions"])
     physical.update(quality)
+    physical["uncertain_regions"] = ocr_result.get("uncertain_regions", [])
+    physical["uncertain_region_count"] = ocr_result.get("uncertain_region_count", 0)
+    physical["ocr_preprocessed"] = ocr_result.get("preprocessed", False)
 
     # 5. RAG retrieval -------------------------------------------------------
     retrieval_query = _retrieval_query(fields, text)
@@ -63,6 +80,14 @@ def run(image_path: str, *, db, use_cache: bool = True) -> dict[str, Any]:
     # 8. Assemble ------------------------------------------------------------
     confidence = round(
         min(1.0, ocr_result["confidence"] * 0.6 + analysis["confidence"] * 0.4), 3
+    )
+
+    # Extra grounding scores (additional transparency metrics).
+    ocr_grounding_score = _ocr_grounding_score(
+        analysis.get("reasoning", ""), text
+    )
+    clause_alignment_score = _clause_alignment_score(
+        analysis.get("reasoning", ""), engine
     )
 
     result = {
@@ -90,6 +115,12 @@ def run(image_path: str, *, db, use_cache: bool = True) -> dict[str, Any]:
         "analyst_note": analysis.get("analyst_note"),
         "confidence": confidence,
         "hallucination_coefficient": analysis["hallucination_coefficient"],
+        "hallucination_breakdown": {
+            **analysis.get("hallucination_breakdown", {}),
+            "ocr_grounding_score": ocr_grounding_score,
+            "clause_alignment_score": clause_alignment_score,
+        },
+        "skipped_checks": engine.get("skipped_checks", []),
         "engine": f"{ocr_result['engine']}+{analysis['engine']}",
         "cache_hit": False,
         "latency_ms": int((time.perf_counter() - started) * 1000),
@@ -121,6 +152,54 @@ def _retrieval_query(fields: dict[str, Any], text: str) -> str:
     return " ".join(parts)[:2000] or text[:2000]
 
 
+def _ocr_grounding_score(reasoning: str, ocr_text: str) -> float:
+    """Fraction of unique meaningful words in the LLM reasoning that appear
+    in the OCR text.
+
+    High score (≥ 0.6) means the LLM is grounded in what was actually read
+    from the label. Low score suggests fabricated/hallucinated content.
+    """
+    if not reasoning or not ocr_text:
+        return 1.0  # neutral when there's nothing to compare
+
+    stop = frozenset(
+        "the a an of in on for to and or is are was were shall not no any "
+        "this that these those by with as at from it its which".split()
+    )
+    reasoning_words = {
+        w.lower() for w in re.findall(r"[a-zA-Z]{3,}", reasoning)
+        if w.lower() not in stop
+    }
+    ocr_words = {
+        w.lower() for w in re.findall(r"[a-zA-Z]{3,}", ocr_text)
+        if w.lower() not in stop
+    }
+    if not reasoning_words:
+        return 1.0
+    grounded = len(reasoning_words & ocr_words)
+    return round(grounded / len(reasoning_words), 3)
+
+
+def _clause_alignment_score(reasoning: str, engine: dict[str, Any]) -> float:
+    """Fraction of engine violation fields mentioned (explained) in the LLM summary.
+
+    Measures whether the LLM has addressed the specific violations the rule
+    engine found, as opposed to talking about unrelated issues.
+    """
+    violations = engine.get("violations", [])
+    if not violations or not reasoning:
+        return 1.0
+
+    reasoning_lower = reasoning.lower()
+    mentioned = sum(
+        1 for v in violations
+        if (v.get("field", "").replace("_", " ") in reasoning_lower
+            or v.get("clause_id", "").lower() in reasoning_lower
+            or str(v.get("rule_number", "")) in reasoning_lower)
+    )
+    return round(mentioned / len(violations), 3)
+
+
 def _empty_result(quality: dict[str, Any], ocr_result: dict[str, Any],
                   started: float) -> dict[str, Any]:
     message = (
@@ -136,7 +215,13 @@ def _empty_result(quality: dict[str, Any], ocr_result: dict[str, Any],
         "counts": {"critical": 0, "major": 0, "minor": 0, "total": 0,
                    "checks_passed": 0, "checks_total": 0},
         "extracted_fields": {},
-        "physical_analysis": {**quality, "text_regions": 0},
+        "physical_analysis": {
+            **quality,
+            "text_regions": 0,
+            "uncertain_regions": [],
+            "uncertain_region_count": 0,
+            "ocr_preprocessed": ocr_result.get("preprocessed", False),
+        },
         "citations": [],
         "product_name": None,
         "ocr_text": "",
@@ -145,6 +230,16 @@ def _empty_result(quality: dict[str, Any], ocr_result: dict[str, Any],
         "analyst_note": None,
         "confidence": 0.0,
         "hallucination_coefficient": 0.0,
+        "hallucination_breakdown": {
+            "citation_drift": 0.0,
+            "finding_drift": 0.0,
+            "entity_drift": 0.0,
+            "penalty_drift": 0.0,
+            "confidence_drift": 0.0,
+            "ocr_grounding_score": 1.0,
+            "clause_alignment_score": 1.0,
+        },
+        "skipped_checks": [],
         "engine": ocr_result.get("engine", "none"),
         "cache_hit": False,
         "latency_ms": int((time.perf_counter() - started) * 1000),
