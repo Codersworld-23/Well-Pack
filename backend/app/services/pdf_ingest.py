@@ -62,16 +62,23 @@ def ingest_pdf_file(path: Path, db: "Session") -> int:
     """Parse *path* and insert any new clauses into the database.
 
     Returns the number of clauses created (0 if all already exist).
-    Skips silently if the file cannot be parsed.
+    Skips the file entirely (no OCR, no parsing) if it has been ingested before.
     """
     from ..models import RuleClause
+
+    stem = re.sub(r"[^A-Za-z0-9]+", "-", path.stem)[:24]
+    prefix = f"UP-{stem}-"
+
+    # Fast skip: if ANY clause from this PDF is already in the DB, the file has
+    # been ingested before. Don't re-open or re-OCR it.
+    if db.query(RuleClause).filter(RuleClause.clause_id.like(f"{prefix}%")).first():
+        return 0
 
     raw = _extract_text(path)
     if not raw.strip():
         log.warning("pdf_ingest: no text extracted from %s", path.name)
         return 0
 
-    stem = re.sub(r"[^A-Za-z0-9]+", "-", path.stem)[:24]
     created = 0
     seen_in_batch: set[str] = set()  # guard against duplicate rule numbers in one PDF
     for number, body in _chunks(raw):

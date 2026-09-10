@@ -95,7 +95,7 @@ Verdicts: `compliant` · `partial` (minor defects only) · `non_compliant` · `n
 | RAG | In-process vector store over the clause corpus | Pinecone-swappable |
 | Cache | Semantic cache, cosine similarity | Redis-swappable |
 | Data | SQLAlchemy → SQLite | PostgreSQL via `DATABASE_URL` |
-| LLM | Anthropic `claude-opus-5` (optional) | Narrates only; never decides the verdict |
+| LLM | OpenAI-compatible `gpt-4o-mini` (optional) | Decides from retrieved PDF clauses; deterministic fallback offline |
 
 Nothing in the pipeline requires a credential. Configure the managed tier when you want
 it — see `backend/.env.example`.
@@ -117,11 +117,12 @@ persisted, so it stays warm across restarts.
 **Multi-modal verification.** Pixel-level measurement (millimetre glyph heights, WCAG
 contrast per text region) and statutory-text comprehension feed a single verdict.
 
-**Bounding the LLM.** The deterministic rule engine decides every verdict. The LLM only
-writes the explanation, and its output is scored for citation drift, finding drift and
-confidence drift — the *hallucination coefficient*, returned on every scan. Above 0.35
-the narrative is discarded and the engine's own summary is shown, so a hallucinated
-clause can never surface as a legal finding. See `docs/ARCHITECTURE.md`.
+**RAG-grounded LLM decision.** The deterministic engine measures OCR/vision evidence,
+while the LLM receives those measurements plus clauses retrieved from the ingested PDF
+corpus and returns the compliance label, score, checks, and violations. Clause IDs are
+validated against retrieval results; malformed or unavailable LLM responses use the
+deterministic fallback. A grounding coefficient is still returned for transparency.
+See `docs/ARCHITECTURE.md`.
 
 ---
 

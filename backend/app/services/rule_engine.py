@@ -1,9 +1,8 @@
 """Deterministic Legal Metrology rule engine.
 
-This is the authority for every verdict. The LLM never decides compliance on
-its own - it explains and cross-references the clauses this engine cites, and
-its narrative is scored for agreement (see llm.py). That bounding is the
-mitigation for the legal-hallucination risk in the feasibility analysis.
+This produces deterministic evidence and the offline fallback verdict. When a
+configured RAG-grounded LLM is available, the pipeline uses this output as
+measurement evidence and lets the LLM make the final structured label decision.
 
 Each check is gated on the clause it enforces being active in the corpus, so
 switching a clause off in the admin portal switches its check off - the check

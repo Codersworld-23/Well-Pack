@@ -2,7 +2,7 @@
 
     ingest -> quality gate -> label-region crop -> OCR (with preprocessing)
            -> extraction -> physical analysis
-           -> semantic cache -> RAG retrieval -> rule engine -> LLM narrative
+           -> semantic cache -> RAG retrieval -> evidence engine -> LLM decision
            -> verdict, cached and logged
 
 Enhanced:
@@ -51,7 +51,7 @@ def run(image_path: str, *, db, use_cache: bool = True) -> dict[str, Any]:
     # 3. Semantic cache ------------------------------------------------------
     if use_cache:
         cached = cache.lookup(text)
-        if cached:
+        if cached and cached.get("analysis_version") == settings.analysis_version:
             return {
                 **cached,
                 "cache_hit": True,
@@ -71,11 +71,12 @@ def run(image_path: str, *, db, use_cache: bool = True) -> dict[str, Any]:
     retrieval_query = _retrieval_query(fields, text)
     clauses = store.query(retrieval_query, top_k=settings.retrieval_top_k)
 
-    # 6. Deterministic rule engine (the authority on the verdict) ------------
+    # 6. Deterministic findings are evidence/fallback, not the final label.
     engine = rule_engine.evaluate(fields, physical, text)
 
-    # 7. LLM narrative, bounded against the engine ---------------------------
+    # 7. RAG-grounded LLM checks the label and returns the authoritative label.
     analysis = llm.verify(fields, physical, clauses, engine, text)
+    decision = analysis.get("decision", engine)
 
     # 8. Assemble ------------------------------------------------------------
     confidence = round(
@@ -86,16 +87,14 @@ def run(image_path: str, *, db, use_cache: bool = True) -> dict[str, Any]:
     ocr_grounding_score = _ocr_grounding_score(
         analysis.get("reasoning", ""), text
     )
-    clause_alignment_score = _clause_alignment_score(
-        analysis.get("reasoning", ""), engine
-    )
+    clause_alignment_score = _clause_alignment_score(analysis.get("reasoning", ""), decision)
 
     result = {
-        "verdict": engine["verdict"],
-        "compliance_score": engine["compliance_score"],
-        "violations": engine["violations"],
-        "checks": engine["checks"],
-        "counts": engine["counts"],
+        "verdict": decision["verdict"],
+        "compliance_score": decision["compliance_score"],
+        "violations": decision["violations"],
+        "checks": decision["checks"],
+        "counts": decision["counts"],
         "extracted_fields": fields,
         "physical_analysis": physical,
         "citations": [
@@ -120,8 +119,9 @@ def run(image_path: str, *, db, use_cache: bool = True) -> dict[str, Any]:
             "ocr_grounding_score": ocr_grounding_score,
             "clause_alignment_score": clause_alignment_score,
         },
-        "skipped_checks": engine.get("skipped_checks", []),
+        "skipped_checks": decision.get("skipped_checks", engine.get("skipped_checks", [])),
         "engine": f"{ocr_result['engine']}+{analysis['engine']}",
+        "analysis_version": settings.analysis_version,
         "cache_hit": False,
         "latency_ms": int((time.perf_counter() - started) * 1000),
         "rule_corpus_version": store.version,

@@ -67,28 +67,28 @@ region — while `services/rag.py` + `services/rule_engine.py` handle the
 statutory text. Both feed one verdict. The two halves are not separate tools
 producing separate reports.
 
-## Bounding the LLM (the legal-hallucination mitigation)
+## RAG-grounded LLM decision (the legal-hallucination mitigation)
 
 The presentation promises a "hallucination coefficient" that keeps legal
 verdicts rigorously bounded. Concretely, in `services/llm.py`:
 
-1. The **deterministic rule engine decides the verdict**. The LLM is never asked
-   to. It receives the engine's findings and the retrieved clauses, and writes
-   the explanation an inspector reads.
-2. Its output is scored on three divergences, each in `[0, 1]`, equally weighted:
+1. The **deterministic rule engine measures evidence and remains the offline
+   fallback**. The LLM receives those measurements, OCR, and clauses retrieved
+   from the ingested PDF corpus, then returns the structured verdict, score,
+   checks, and violations.
+2. Its output is grounded by validating every cited clause and violation against
+   the retrieved clauses. It is also scored on grounding drift:
    - **citation drift** — clause_ids cited that were never retrieved,
-   - **finding drift** — symmetric difference between the fields the LLM calls
-     non-compliant and the fields the engine actually flagged,
-   - **confidence drift** — confidence asserted beyond what the checks support.
-3. Above `HALLUCINATION_LIMIT` (0.35) the narrative is **discarded** and the
-   engine's own summary is shown instead. A hallucinated clause cannot reach a
-   user as a legal finding.
+   - **entity drift** — numbers in the summary absent from OCR/extracted fields,
+   - **decision drift** — difference from the independent engine hint.
+3. Invalid or ungrounded model output is discarded and the deterministic
+   fallback is shown. A hallucinated clause cannot reach a user as a legal
+   finding.
 
 The coefficient is returned on every scan and surfaced in the UI.
 
-Without `ANTHROPIC_API_KEY` the pipeline runs fully — step 8 falls back to a
-deterministic summary built from the verified findings, and the verdict is
-identical, because the verdict never depended on the LLM.
+Without `OPENAI_API_KEY` (or when the OpenAI-compatible endpoint is unavailable)
+the pipeline runs fully using a deterministic summary and fallback verdict.
 
 ## Verdict model
 

@@ -16,9 +16,9 @@ pillow>=11.0
 rapidocr-onnxruntime>=1.4.0  # ONNX OCR, bundled models, no system binary
 onnxruntime>=1.20
 
-# --- optional: LLM narrative layer ---
-# Without a key the pipeline uses the deterministic rule engine for reasoning.
-anthropic>=0.40
+# --- RAG-grounded LLM compliance decision (OpenAI-compatible endpoint) ---
+openai>=1.60.0
+python-dotenv>=1.0.0
 
 # --- document parsing ---
 pypdf>=4.0

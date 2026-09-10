@@ -113,8 +113,9 @@ def system_status(db: Session = Depends(get_db)):
         "ocr_engine": ocr.engine_name(),
         "llm": {
             "model": settings.llm_model,
-            "configured": bool(settings.anthropic_api_key),
-            "mode": "rag+llm" if settings.anthropic_api_key else "rag+rule-engine",
+            "configured": bool(settings.openai_api_key),
+            "endpoint": settings.openai_base_url,
+            "mode": "rag+llm" if settings.openai_api_key else "rag+rule-engine-fallback",
         },
         "database": settings.database_url.split("://")[0],
         "totals": {
