@@ -63,6 +63,10 @@ class Scan(Base):
     latency_ms: Mapped[int] = mapped_column(Integer, default=0)
     fingerprint: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
 
+    @property
+    def hallucination_breakdown(self) -> dict:
+        return (self.physical_analysis or {}).get("hallucination_breakdown", {})
+
     reports: Mapped[list["Report"]] = relationship(back_populates="scan")
 
 

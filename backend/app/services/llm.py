@@ -173,13 +173,14 @@ def verify(fields: dict[str, Any], physical: dict[str, Any],
         log.warning("LLM verification unavailable (%s) - using rule engine reasoning", exc)
         return _fallback(engine, physical, clauses)
 
-    coefficient = hallucination_coefficient(parsed, engine, clauses)
+    coefficient, breakdown = hallucination_assessment(parsed, engine, clauses, ocr_text, fields)
     bounded = coefficient <= HALLUCINATION_LIMIT
 
     if not bounded:
         log.warning("LLM output rejected: hallucination coefficient %.2f", coefficient)
         result = _fallback(engine, physical, clauses)
         result["hallucination_coefficient"] = round(coefficient, 3)
+        result["hallucination_breakdown"] = breakdown
         result["bounded"] = False
         result["engine"] = f"{settings.llm_model} (rejected -> rule-engine)"
         return result
@@ -189,21 +190,31 @@ def verify(fields: dict[str, Any], physical: dict[str, Any],
         "analyst_note": parsed.get("analyst_note") or None,
         "confidence": float(parsed.get("confidence", 0.8)),
         "hallucination_coefficient": round(coefficient, 3),
+        "hallucination_breakdown": breakdown,
         "bounded": True,
         "engine": f"rag+{settings.llm_model}",
     }
 
 
-def hallucination_coefficient(parsed: dict[str, Any], engine: dict[str, Any],
-                              clauses: list[dict[str, Any]]) -> float:
-    """Bounded divergence between the LLM narrative and the verified findings.
+def hallucination_assessment(parsed: dict[str, Any], engine: dict[str, Any],
+                             clauses: list[dict[str, Any]], ocr_text: str = "",
+                             fields: dict[str, Any] | None = None) -> tuple[float, dict[str, float]]:
+    """Comprehensive 5-factor assessment of LLM hallucination and legal divergence.
 
-    Three components, each in [0, 1] and equally weighted:
-      * citation drift  - clause_ids cited that were never retrieved
-      * finding drift   - symmetric difference between the fields the LLM calls
-                          non-compliant and the fields the engine flagged
-      * confidence drift- confidence asserted beyond what the OCR supports
+    Factors and weights:
+      1. citation_drift   (0.30) - clause_ids cited that were never retrieved
+      2. finding_drift    (0.30) - symmetric difference between LLM claimed violations
+                                   and rule engine findings (the ground truth)
+      3. entity_drift     (0.20) - numbers/prices claimed in summary not in OCR or fields
+      4. penalty_drift    (0.10) - fabricated statutes, IPC sections, non-existent penalties
+      5. confidence_drift (0.10) - over-asserted confidence beyond OCR ground truth
+
+    A score > HALLUCINATION_LIMIT (0.35) causes the narrative to be discarded
+    and replaced by the deterministic rule engine summary.
     """
+    import re as _re
+    fields = fields or {}
+    summary = parsed.get("summary", "")
     retrieved = {c["clause_id"] for c in clauses}
     cited = {c for c in parsed.get("cited_clause_ids", []) if c}
     citation_drift = (len(cited - retrieved) / len(cited)) if cited else 0.0
@@ -213,11 +224,61 @@ def hallucination_coefficient(parsed: dict[str, Any], engine: dict[str, Any],
     union = engine_fields | llm_fields
     finding_drift = (len(engine_fields ^ llm_fields) / len(union)) if union else 0.0
 
+    # Entity drift: check numbers/prices in summary vs OCR text and extracted fields
+    claimed_numbers = set(_re.findall(r"\b\d+(?:\.\d+)?\b", summary))
+    ocr_numbers = set(_re.findall(r"\b\d+(?:\.\d+)?\b", ocr_text or ""))
+    field_numbers = set()
+    for v in fields.values():
+        if isinstance(v, (int, float)):
+            field_numbers.add(str(v))
+        elif isinstance(v, str):
+            field_numbers.update(_re.findall(r"\b\d+(?:\.\d+)?\b", v))
+    # Known-safe statutory year references and rule numbers.
+    allowed_numbers = ocr_numbers | field_numbers | {
+        "2011", "2009", "2023", "36", "6", "9", "5", "18", "32",
+        "1", "2", "3", "4", "7", "8", "10", "100",
+    }
+    hallucinated_nums = claimed_numbers - allowed_numbers
+    entity_drift = round(
+        min(1.0, len(hallucinated_nums) / max(len(claimed_numbers), 1)), 4
+    ) if claimed_numbers else 0.0
+
+    # Penalty drift: fabricated legal references that do not exist in the 2011 Rules.
+    penalty_drift = 0.0
+    if _re.search(
+        r"\b(?:ipc|section 420|jail for \d+ years|fine of \d{6,}|criminal)\b",
+        summary, _re.I
+    ):
+        penalty_drift = 1.0
+
+    # Confidence drift: LLM claiming certainty the OCR doesn't support.
     stated = float(parsed.get("confidence", 0.5))
     supportable = 1.0 if engine["counts"]["checks_total"] else 0.0
     confidence_drift = max(0.0, stated - supportable)
 
-    return round((citation_drift + finding_drift + confidence_drift) / 3.0, 4)
+    score = round(
+        0.30 * citation_drift +
+        0.30 * finding_drift +
+        0.20 * entity_drift +
+        0.10 * penalty_drift +
+        0.10 * confidence_drift,
+        4,
+    )
+
+    breakdown = {
+        "citation_drift": round(citation_drift, 3),
+        "finding_drift": round(finding_drift, 3),
+        "entity_drift": round(entity_drift, 3),
+        "penalty_drift": round(penalty_drift, 3),
+        "confidence_drift": round(confidence_drift, 3),
+    }
+    return score, breakdown
+
+
+def hallucination_coefficient(parsed: dict[str, Any], engine: dict[str, Any],
+                              clauses: list[dict[str, Any]]) -> float:
+    """Backward compatibility wrapper."""
+    return hallucination_assessment(parsed, engine, clauses)[0]
 
 
 def _fallback(engine: dict[str, Any], physical: dict[str, Any],
@@ -249,6 +310,13 @@ def _fallback(engine: dict[str, Any], physical: dict[str, Any],
         "analyst_note": None,
         "confidence": 0.72 if physical.get("quality_ok", True) else 0.4,
         "hallucination_coefficient": 0.0,
+        "hallucination_breakdown": {
+            "citation_drift": 0.0,
+            "finding_drift": 0.0,
+            "entity_drift": 0.0,
+            "penalty_drift": 0.0,
+            "confidence_drift": 0.0,
+        },
         "bounded": True,
         "engine": "rag+rule-engine",
     }

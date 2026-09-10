@@ -170,6 +170,15 @@ def evaluate(fields: dict[str, Any], physical: dict[str, Any],
     if clause:
         if fields.get("manufacture_date"):
             record("manufacture_date_present", True, clause, fields["manufacture_date"])
+        elif fields.get("pointer_declarations"):
+            pointers = ", ".join(fields["pointer_declarations"][:2])
+            violations.append(_violation(
+                clause,
+                f"Date of packing is indicated elsewhere on the pack ('{pointers}'). Scan the referenced panel to verify date compliance.",
+                observed=pointers, expected="Manufactured/Packed in MM/YYYY on referenced panel",
+                severity="minor",
+            ))
+            record("manufacture_date_present", False, clause, f"referenced on other panel ({pointers})")
         else:
             violations.append(_violation(
                 clause,
@@ -182,11 +191,21 @@ def evaluate(fields: dict[str, Any], physical: dict[str, Any],
     clause = governing("mrp_present", "PCR-2011-R6.1.e")
     if clause:
         if not fields.get("mrp"):
-            violations.append(_violation(
-                clause, "No maximum retail price declaration was found on the label.",
-                observed="absent", expected="MRP Rs. <price> inclusive of all taxes",
-            ))
-            record("mrp_present", False, clause, "missing")
+            if fields.get("pointer_declarations"):
+                pointers = ", ".join(fields["pointer_declarations"][:2])
+                violations.append(_violation(
+                    clause,
+                    f"Retail sale price is indicated elsewhere on the pack ('{pointers}'). Scan the referenced panel to verify MRP compliance.",
+                    observed=pointers, expected="MRP Rs. <price> inclusive of all taxes on referenced panel",
+                    severity="minor",
+                ))
+                record("mrp_present", False, clause, f"referenced on other panel ({pointers})")
+            else:
+                violations.append(_violation(
+                    clause, "No maximum retail price declaration was found on the label.",
+                    observed="absent", expected="MRP Rs. <price> inclusive of all taxes",
+                ))
+                record("mrp_present", False, clause, "missing")
         else:
             record("mrp_present", True, clause, fields["mrp"])
             if not fields.get("mrp_inclusive_of_taxes"):

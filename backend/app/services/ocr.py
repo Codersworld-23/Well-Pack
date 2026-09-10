@@ -5,6 +5,11 @@ prototype runs offline. Tesseract is used when installed. In a cloud deployment
 the same `OCREngine` interface is what AWS Textract / Google Cloud Vision would
 implement - each returns text plus per-region boxes and confidences, which is
 what the physical-constraint analysis needs.
+
+Enhancement: the preprocessing pipeline (vision.preprocess_for_ocr) is applied
+before every OCR pass to maximise accuracy on real packaging photos. Low-confidence
+regions are flagged in the output so downstream code can treat their fields with
+appropriate caution.
 """
 
 from __future__ import annotations
@@ -18,6 +23,9 @@ log = logging.getLogger(__name__)
 
 _engine: Any = None
 _engine_name: str = "none"
+
+# Regions with confidence below this threshold are flagged as uncertain.
+CONFIDENCE_FLOOR = 0.50
 
 
 def _init_engine() -> tuple[Any, str]:
@@ -83,6 +91,7 @@ def _rapidocr_regions(result: Any) -> list[dict[str, Any]]:
                 "text": text,
                 "box": [[float(p[0]), float(p[1])] for p in box],
                 "confidence": round(score, 3),
+                "uncertain": score < CONFIDENCE_FLOOR,
             })
         return regions
 
@@ -91,10 +100,12 @@ def _rapidocr_regions(result: Any) -> list[dict[str, Any]]:
             box, text, score = item[0], item[1], item[2]
         except (TypeError, IndexError):
             continue
+        score = float(score)
         regions.append({
             "text": str(text).strip(),
             "box": [[float(p[0]), float(p[1])] for p in box],
-            "confidence": round(float(score), 3),
+            "confidence": round(score, 3),
+            "uncertain": score < CONFIDENCE_FLOOR,
         })
     return regions
 
@@ -112,22 +123,44 @@ def _tesseract_regions(image: np.ndarray) -> list[dict[str, Any]]:  # pragma: no
             continue
         x, y = data["left"][i], data["top"][i]
         w, h = data["width"][i], data["height"][i]
+        norm_conf = round(conf / 100.0, 3)
         regions.append({
             "text": text,
             "box": [[x, y], [x + w, y], [x + w, y + h], [x, y + h]],
-            "confidence": round(conf / 100.0, 3),
+            "confidence": norm_conf,
+            "uncertain": norm_conf < CONFIDENCE_FLOOR,
         })
     return regions
 
 
-def extract(image: np.ndarray) -> dict[str, Any]:
-    """Run OCR over a BGR image. Returns text, regions and mean confidence."""
+def extract(image: np.ndarray, *, preprocess: bool = True) -> dict[str, Any]:
+    """Run OCR over a BGR image. Returns text, regions and mean confidence.
+
+    Parameters
+    ----------
+    image:
+        BGR image array as loaded by vision.load_image().
+    preprocess:
+        If True (default), runs the CLAHE/denoising/deskew pipeline over the
+        image before feeding it to the OCR engine. Set False when the image is
+        already an ideal, pre-processed crop.
+    """
+    from . import vision
+
     engine, name = _init_engine()
+
+    ocr_image = image
+    if preprocess and name != "none":
+        try:
+            ocr_image = vision.preprocess_for_ocr(image)
+        except Exception as exc:
+            log.warning("OCR preprocessing failed (%s), using raw image", exc)
+
     regions: list[dict[str, Any]] = []
 
     if name.startswith("rapidocr"):
         try:
-            result = engine(image)
+            result = engine(ocr_image)
             # The legacy build returns (result, elapsed).
             if isinstance(result, tuple):
                 result = result[0]
@@ -136,7 +169,7 @@ def extract(image: np.ndarray) -> dict[str, Any]:
             log.exception("RapidOCR failed: %s", exc)
     elif name == "tesseract":
         try:
-            regions = _tesseract_regions(image)
+            regions = _tesseract_regions(ocr_image)
         except Exception as exc:
             log.exception("Tesseract failed: %s", exc)
 
@@ -146,12 +179,18 @@ def extract(image: np.ndarray) -> dict[str, Any]:
 
     text = "\n".join(r["text"] for r in regions if r["text"])
     confidences = [r["confidence"] for r in regions if r.get("confidence")]
+    uncertain_regions = [r["text"][:80] for r in regions if r.get("uncertain")]
+
+    mean_confidence = round(sum(confidences) / len(confidences), 3) if confidences else 0.0
 
     return {
         "text": text,
         "regions": regions,
-        "confidence": round(sum(confidences) / len(confidences), 3) if confidences else 0.0,
+        "confidence": mean_confidence,
         "engine": name,
+        "uncertain_regions": uncertain_regions,
+        "uncertain_region_count": len(uncertain_regions),
+        "preprocessed": preprocess and name != "none",
     }
 
 
