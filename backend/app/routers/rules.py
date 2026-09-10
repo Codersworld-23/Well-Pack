@@ -17,6 +17,7 @@ from ..database import get_db
 from ..models import RuleClause
 from ..schemas import RuleClauseOut, RuleClauseIn
 from ..services.cache import cache
+from ..services.pdf_ingest import CLAUSE_SPLIT_RE, _chunks as _pdf_chunks
 from ..services.rag import reindex_from_db, store
 
 router = APIRouter(prefix="/api/rules", tags=["rules"])
@@ -105,35 +106,41 @@ def delete_rule(clause_id: str, db: Session = Depends(get_db)):
     _refresh(db)
 
 
-CLAUSE_SPLIT_RE = re.compile(
-    r"(?m)^\s*(?:Rule\s+)?(\d+(?:\s*\(\w+\))*)\s*[.:\-]\s+", re.IGNORECASE
-)
-
-
 @router.post("/upload")
 async def upload_policy(file: UploadFile = File(...), db: Session = Depends(get_db)):
-    """Ingest a plain-text policy document and index it as clauses.
+    """Ingest a plain-text or PDF policy document and index it as clauses.
 
     Splits on rule numbers ("6(1)(a).", "Rule 12:"). Anything it cannot split is
     chunked by paragraph, so an amendment circular is usable immediately.
     """
-    if not (file.filename or "").lower().endswith((".txt", ".md")):
-        raise HTTPException(415, "Upload a .txt or .md policy document.")
+    filename = (file.filename or "").lower()
+    if not filename.endswith((".txt", ".md", ".pdf")):
+        raise HTTPException(415, "Upload a .txt, .md, or .pdf policy document.")
 
-    raw = (await file.read()).decode("utf-8", errors="ignore")
+    if filename.endswith(".pdf"):
+        import fitz
+        import numpy as np
+        from ..services.ocr import extract as ocr_extract
+
+        raw_text_parts = []
+        doc = fitz.open(stream=await file.read(), filetype="pdf")
+        for page in doc:
+            text = page.get_text().strip()
+            if len(text) < 50:
+                pix = page.get_pixmap()
+                img = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, pix.n)
+                if pix.n == 4:
+                    img = img[:, :, :3]
+                text = ocr_extract(img)["text"]
+            raw_text_parts.append(text)
+        raw = "\n".join(raw_text_parts)
+    else:
+        raw = (await file.read()).decode("utf-8", errors="ignore")
+
     if not raw.strip():
         raise HTTPException(422, "The uploaded document is empty.")
 
-    chunks: list[tuple[str, str]] = []
-    parts = CLAUSE_SPLIT_RE.split(raw)
-    if len(parts) > 2:
-        for i in range(1, len(parts) - 1, 2):
-            number, body = parts[i].strip(), parts[i + 1].strip()
-            if body:
-                chunks.append((number, body))
-    else:
-        for i, para in enumerate(p.strip() for p in raw.split("\n\n") if p.strip()):
-            chunks.append((f"U{i + 1}", para))
+    chunks: list[tuple[str, str]] = _pdf_chunks(raw)
 
     stem = re.sub(r"[^A-Za-z0-9]+", "-", (file.filename or "upload").rsplit(".", 1)[0])[:24]
     created = 0
