@@ -134,6 +134,33 @@ class VectorStore:
         with self._lock:
             return next((m for m in self._meta if m["clause_id"] == clause_id), None)
 
+    def augment(self, retrieved: list[dict[str, Any]],
+                clause_ids: list[str]) -> list[dict[str, Any]]:
+        """Add *clause_ids* to *retrieved*, preserving order and de-duplicating.
+
+        Semantic top-k alone is not enough to decide compliance. The rule engine
+        reasons about ten clauses, so a top-5 retrieval leaves the LLM unable to
+        cite - and therefore unable to rule on - declarations like the MRP or
+        consumer-care requirement. Since the LLM may only cite clauses it was
+        shown, every clause the engine considered is force-included here.
+
+        Force-included clauses carry score 0.0: they were selected because they
+        govern a check, not because they matched the query.
+        """
+        present = {c["clause_id"] for c in retrieved}
+        out = list(retrieved)
+        with self._lock:
+            for clause_id in clause_ids:
+                if clause_id in present:
+                    continue
+                clause = next(
+                    (m for m in self._meta if m["clause_id"] == clause_id), None
+                )
+                if clause is not None:
+                    out.append({**clause, "score": 0.0})
+                    present.add(clause_id)
+        return out
+
     @property
     def size(self) -> int:
         return len(self._meta)

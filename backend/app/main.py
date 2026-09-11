@@ -36,6 +36,21 @@ async def lifespan(app: FastAPI):
             "WellPack ready - %d clauses indexed, %d cache entries warm, seeded %s",
             indexed, cached, counts,
         )
+
+        # Say plainly which tier will decide verdicts. A missing key or an
+        # uninstalled SDK silently downgrades every scan to the regex engine,
+        # and that is far too easy to run for weeks without noticing.
+        from .services import llm
+
+        if llm.available():
+            log.info("Compliance decisions: RAG-grounded LLM (%s)", settings.llm_model)
+        else:
+            log.warning(
+                "Compliance decisions: DETERMINISTIC RULE ENGINE ONLY - the "
+                "RAG-grounded LLM is unavailable. Set OPENAI_API_KEY and install "
+                "requirements.txt (openai). Verdicts will rely on regex extraction "
+                "and can report present declarations as missing."
+            )
     finally:
         db.close()
     yield

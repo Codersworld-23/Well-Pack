@@ -67,16 +67,30 @@ def run(image_path: str, *, db, use_cache: bool = True) -> dict[str, Any]:
     physical["uncertain_region_count"] = ocr_result.get("uncertain_region_count", 0)
     physical["ocr_preprocessed"] = ocr_result.get("preprocessed", False)
 
-    # 5. RAG retrieval -------------------------------------------------------
+    # 5. Deterministic findings are evidence/fallback, not the final label.
+    engine = rule_engine.evaluate(fields, physical, text)
+
+    # 6. RAG retrieval -------------------------------------------------------
+    # Semantic top-k, then force-include every clause the engine reasoned about.
+    # The LLM may only cite clauses it was shown, so without this augmentation it
+    # cannot rule on a mandatory declaration whose clause missed the top-k -
+    # which previously made its whole decision ungrounded and unusable.
     retrieval_query = _retrieval_query(fields, text)
     clauses = store.query(retrieval_query, top_k=settings.retrieval_top_k)
-
-    # 6. Deterministic findings are evidence/fallback, not the final label.
-    engine = rule_engine.evaluate(fields, physical, text)
+    clauses = store.augment(clauses, _engine_clause_ids(engine))
 
     # 7. RAG-grounded LLM checks the label and returns the authoritative label.
     analysis = llm.verify(fields, physical, clauses, engine, text)
     decision = analysis.get("decision", engine)
+
+    # The LLM re-reads the raw OCR text and recovers declarations the regex
+    # extractor missed, which is the fix for "net quantity absent" on a label
+    # that plainly shows one. Corrections are already validated against the OCR
+    # text in llm._clean_corrections, so they cannot invent a value.
+    corrections = analysis.get("field_corrections") or {}
+    if corrections:
+        fields = {**fields, **corrections}
+        fields["recovered_by_llm"] = sorted(corrections)
 
     # 8. Assemble ------------------------------------------------------------
     confidence = round(
@@ -120,6 +134,9 @@ def run(image_path: str, *, db, use_cache: bool = True) -> dict[str, Any]:
             "clause_alignment_score": clause_alignment_score,
         },
         "skipped_checks": decision.get("skipped_checks", engine.get("skipped_checks", [])),
+        # Surfaced so the UI can say whether the LLM or the regex fallback
+        # decided this scan, instead of the fallback masquerading as an analysis.
+        "decision_source": analysis.get("decision_source", "deterministic-fallback"),
         "engine": f"{ocr_result['engine']}+{analysis['engine']}",
         "analysis_version": settings.analysis_version,
         "cache_hit": False,
@@ -136,6 +153,22 @@ def run(image_path: str, *, db, use_cache: bool = True) -> dict[str, Any]:
             log.warning("Cache store failed: %s", exc)
 
     return result
+
+
+def _engine_clause_ids(engine: dict[str, Any]) -> list[str]:
+    """Every clause the deterministic engine considered, in a stable order.
+
+    Includes checks that passed and clauses that were skipped because an admin
+    deactivated them - the LLM still needs the passing ones in front of it to
+    confirm a declaration is present rather than assume it is absent.
+    """
+    ids: list[str] = []
+    for source in (engine.get("checks", []), engine.get("violations", [])):
+        for item in source:
+            clause_id = item.get("clause_id")
+            if clause_id and clause_id not in ids:
+                ids.append(clause_id)
+    return ids
 
 
 def _retrieval_query(fields: dict[str, Any], text: str) -> str:

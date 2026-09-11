@@ -1,7 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { API_BASE, type ScanResult, verdictOf } from "@/lib/api";
+import { useState } from "react";
+import { API_BASE, api, type ReportFormat, type ScanResult, verdictOf } from "@/lib/api";
 import { ScoreRing, SeverityChip, Section, VerdictBadge } from "@/components/ui";
 
 const FIELD_LABELS: Record<string, string> = {
@@ -117,6 +118,8 @@ export default function ScanResultView({ scan }: { scan: ScanResult }) {
           />
           <Meta label="Latency" value={`${scan.latency_ms} ms`} hint={scan.engine ?? ""} />
         </dl>
+
+        <ReportDownload scanId={scan.id} />
       </div>
 
       {/* --- analyst note --- */}
@@ -444,6 +447,61 @@ function Meta({
         {value}
       </dd>
       {hint && <p className="text-[11px] text-[var(--muted)]">{hint}</p>}
+    </div>
+  );
+}
+
+/**
+ * Download the scan as a compliance report.
+ *
+ * Two formats, because they serve different moments: the PDF is what gets
+ * filed or served, while the DOCX is for the officer who needs to correct a
+ * misread declaration or add observations before issuing it.
+ */
+function ReportDownload({ scanId }: { scanId: string }) {
+  const [busy, setBusy] = useState<ReportFormat | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  async function download(format: ReportFormat) {
+    setBusy(format);
+    setError(null);
+    try {
+      await api.downloadReport(scanId, format);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Report download failed.");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  return (
+    <div className="mt-4 border-t pt-4">
+      <div className="flex flex-wrap items-center gap-3">
+        <span className="text-xs font-bold uppercase tracking-wider text-[var(--muted)]">
+          Compliance report
+        </span>
+        <button
+          type="button"
+          onClick={() => download("pdf")}
+          disabled={busy !== null}
+          className="rounded-lg border px-3 py-1.5 text-sm font-semibold transition hover:bg-[var(--surface-2)] disabled:opacity-50"
+        >
+          {busy === "pdf" ? "Preparing…" : "Download PDF"}
+        </button>
+        <button
+          type="button"
+          onClick={() => download("docx")}
+          disabled={busy !== null}
+          className="rounded-lg border px-3 py-1.5 text-sm font-semibold transition hover:bg-[var(--surface-2)] disabled:opacity-50"
+        >
+          {busy === "docx" ? "Preparing…" : "Download editable (.docx)"}
+        </button>
+      </div>
+      <p className="mt-1.5 text-[11px] text-[var(--muted)]">
+        The PDF is the filing copy. The .docx opens in Word so an officer can correct a
+        misread declaration and add observations before issuing it.
+      </p>
+      {error && <p className="mt-1.5 text-xs tone-fail">{error}</p>}
     </div>
   );
 }

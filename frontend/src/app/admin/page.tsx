@@ -138,8 +138,10 @@ export default function AdminDashboard() {
               value={system.llm.mode}
               hint={
                 system.llm.configured
-                  ? `${system.llm.model} narrates; the rule engine decides`
-                  : `Set ANTHROPIC_API_KEY to enable ${system.llm.model} narration`
+                  ? `${system.llm.model} decides, grounded in the retrieved clauses`
+                  : system.llm.api_key_present === false
+                    ? "Set OPENAI_API_KEY — verdicts are coming from the regex rule engine"
+                    : "openai SDK not installed — verdicts are coming from the regex rule engine"
               }
             />
             <Row label="Database" value={system.database} />

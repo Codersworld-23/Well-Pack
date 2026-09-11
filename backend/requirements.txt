@@ -21,6 +21,12 @@ openai>=1.60.0
 python-dotenv>=1.0.0
 
 # --- document parsing ---
-pypdf>=4.0
+# PyMuPDF is what services/pdf_ingest.py actually imports (as `fitz`); it is
+# needed for both text extraction and rasterising image-only policy pages.
+PyMuPDF>=1.24
+
+# --- compliance report generation (PDF + editable DOCX) ---
+reportlab>=4.2
+python-docx>=1.1
 
 httpx>=0.28

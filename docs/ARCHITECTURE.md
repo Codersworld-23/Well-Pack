@@ -28,18 +28,30 @@ Problem Statement **SIH26034** · Legal Metrology (Packaged Commodities) Rules, 
    │      Character height in mm vs the Second Schedule; WCAG relative-luminance
    │      contrast of ink against paper, per declaration region.
    │
-   ├─ 6. RAG retrieval ............... rag.store.query()
+   ├─ 6. Rule engine ................. rule_engine.evaluate()
+   │      EVIDENCE, NOT THE VERDICT. Machine-verifiable checks over the regex
+   │      extraction and the pixel measurements, scored by severity weight.
+   │      Also the offline fallback when the LLM tier is unavailable.
+   │
+   ├─ 7. RAG retrieval ............... rag.store.query() + rag.store.augment()
    │      Hashed TF-IDF embedding over the live clause corpus. Queries carry the
    │      declarations found *and the names of the ones missing* — absent
    │      declarations are exactly what the retrieved clauses must cover.
+   │      augment() then force-includes every clause the engine reasoned about.
+   │      This matters: the LLM may only cite clauses it was shown, so a bare
+   │      top-5 retrieval left it unable to rule on half the mandatory
+   │      declarations, and its whole decision was discarded as ungrounded.
    │
-   ├─ 7. Rule engine ................. rule_engine.evaluate()
-   │      THE AUTHORITY ON THE VERDICT. Machine-verifiable checks, each paired
-   │      with the clause retrieved in step 6 and scored by severity weight.
-   │
-   ├─ 8. LLM narrative ............... llm.verify()
-   │      Explains the position over the retrieved clauses. Scored against the
-   │      engine; above the bound the narrative is discarded (see below).
+   ├─ 8. LLM decision ................ llm.verify()
+   │      THE AUTHORITY ON THE VERDICT. Receives the raw OCR text as primary
+   │      evidence, the retrieved clauses as the only citable law, and the
+   │      engine findings as hints to verify. Returns the verdict, checks,
+   │      violations and `field_corrections` — declarations it can read in the
+   │      OCR text that the regex extractor missed. Corrections are accepted
+   │      only if their digits appear in the OCR text, so a recovered
+   │      declaration can never become an invented one.
+   │      Items citing an unretrieved clause are dropped individually; the rest
+   │      of the decision stands. Only a wholly unusable response falls back.
    │
    └─ 9. Verdict → cached → logged to PostgreSQL/SQLite for admin analytics.
 ```

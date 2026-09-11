@@ -31,3 +31,9 @@ backend/samples/
 SIHPPT.pdf
 SIHProgress.pdf
 *.pdf
+# ...but the Legal Metrology policy corpus IS the RAG memory. Without these
+# eight PDFs a fresh clone seeds an empty clause index, so they are tracked.
+!dataset/*.pdf
+
+# generated compliance reports
+backend/reports/

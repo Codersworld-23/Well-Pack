@@ -6,15 +6,16 @@ import shutil
 import uuid
 from pathlib import Path
 
-from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi.responses import Response
 from sqlalchemy import desc
 from sqlalchemy.orm import Session
 
 from ..config import settings
-from ..database import SessionLocal, get_db
+from ..database import get_db
 from ..models import Scan
 from ..schemas import ScanResult, ScanSummary
-from ..services import pipeline, vision
+from ..services import pipeline, report_doc, vision
 
 router = APIRouter(prefix="/api/scans", tags=["scans"])
 
@@ -44,6 +45,9 @@ def _persist(db: Session, scan: Scan, result: dict) -> Scan:
     scan.physical_analysis = {
         **result["physical_analysis"],
         "hallucination_breakdown": result.get("hallucination_breakdown", {}),
+        # Carried here rather than in a new column so it survives both the POST
+        # response and a later GET without a schema migration.
+        "decision_source": result.get("decision_source", "deterministic-fallback"),
     }
     scan.violations = result["violations"]
     scan.citations = result["citations"]
@@ -192,6 +196,59 @@ def rescan(scan_id: str, db: Session = Depends(get_db)):
         raise HTTPException(404, "Scan not found")
     result = pipeline.run(scan.image_path, db=db, use_cache=False)
     return _persist(db, scan, result)
+
+
+REPORT_FORMATS = {
+    "pdf": (
+        "application/pdf",
+        lambda scan: report_doc.build_pdf(scan),
+    ),
+    "docx": (
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        lambda scan: report_doc.build_docx(scan),
+    ),
+}
+
+
+@router.get("/{scan_id}/report")
+def download_report(scan_id: str, format: str = "pdf", db: Session = Depends(get_db)):
+    """Download this scan as a compliance report.
+
+    `format=pdf`  - fixed-layout report for filing or serving.
+    `format=docx` - the same report as an editable Word document, so an officer
+                    can revise the wording or correct a misread declaration
+                    before issuing it.
+    """
+    fmt = format.lower().strip()
+    if fmt not in REPORT_FORMATS:
+        raise HTTPException(
+            400, f"Unsupported format '{format}'. Use one of: {', '.join(REPORT_FORMATS)}"
+        )
+
+    scan = db.get(Scan, scan_id)
+    if not scan:
+        raise HTTPException(404, "Scan not found")
+    if scan.status != "complete":
+        raise HTTPException(
+            409, "This scan has not finished processing, so it has no report yet."
+        )
+
+    media_type, build = REPORT_FORMATS[fmt]
+    try:
+        payload = build(scan)
+    except ImportError as exc:  # missing reportlab / python-docx
+        raise HTTPException(
+            503,
+            f"Report generation for '{fmt}' is unavailable on this deployment: {exc}. "
+            "Install the dependencies in backend/requirements.txt.",
+        ) from exc
+
+    filename = report_doc.filename_for(scan, fmt)
+    return Response(
+        content=payload,
+        media_type=media_type,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @router.delete("/{scan_id}", status_code=204)

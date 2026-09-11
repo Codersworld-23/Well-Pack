@@ -28,21 +28,39 @@ MONTHS = {
     "jul": 7, "aug": 8, "sep": 9, "sept": 9, "oct": 10, "nov": 11, "dec": 12,
 }
 
+# The gap between "MRP" and its value must not swallow words. A permissive
+# [^0-9]{0,25} used to leap over intervening label text to reach the first
+# number anywhere nearby - on a real pack it read "MRP ( ol PEPPY TOMATO
+# 240022", capturing a barcode as the price. Only currency marks and
+# punctuation may separate the label from its amount.
+#
+# The trailing (?!\d) stops a long barcode ("24002200") from being truncated
+# into a plausible-looking six-digit price.
 MRP_RE = re.compile(
     r"(?:m\.?\s?r\.?\s?p\.?|max(?:imum)?\.?\s*retail\s*price|retail\s*price)"
-    r"[^0-9]{0,25}(\d{1,6}(?:[.,]\d{1,2})?)",
+    r"[\s:.\-=]{0,6}(?:rs\.?|inr|₹|=)?[\s:.\-=]{0,4}"
+    r"(\d{1,6}(?:[.,]\d{1,2})?)(?!\d)",
     re.IGNORECASE,
 )
 PRICE_FALLBACK_RE = re.compile(
-    r"(?:rs\.?|inr|₹)\s*(\d{1,6}(?:[.,]\d{1,2})?)", re.IGNORECASE
+    r"(?:rs\.?|inr|₹)\s*(\d{1,6}(?:[.,]\d{1,2})?)(?!\d)", re.IGNORECASE
 )
 INCLUSIVE_RE = re.compile(
     r"incl(?:usive)?\.?\s*of\s*all\s*tax", re.IGNORECASE
 )
 
+# "Net" survives OCR as Nel/Ner/Nct/Nel/N e t; "Wt" as Wl/W1/vvt. Accepting the
+# damaged spellings is what stops a legible "Nel Wt. 200 g" from being reported
+# as an unlabelled quantity - or, when the bare-number fallback also misses, as
+# no net quantity at all.
+_NET_WORD = r"n[ea]t{1,2}?|ne[tlrc]|nett"
+_WT_WORD = r"wt|w[t1l]|weight|welght|qty|quantity|content[s]?|vol(?:ume)?"
+
 QTY_LABEL_RE = re.compile(
-    r"(?:net\s*(?:wt\.?|weight|qty\.?|quantity|content|vol(?:ume)?)?|nett?\s*wt\.?)"
-    r"[^0-9]{0,20}(\d{1,6}(?:[.,]\d{1,3})?)\s*([a-zA-Z]{1,10})",
+    rf"(?:(?:{_NET_WORD})\s*\.?\s*(?:{_WT_WORD})?|(?:{_WT_WORD}))"
+    # Allow the value to sit on the next OCR line: the separator may include the
+    # newline that region-joining inserted between label and value.
+    r"[^0-9a-zA-Z]{0,8}[^0-9]{0,12}(\d{1,6}(?:[.,]\d{1,3})?)\s*([a-zA-Z]{1,10})",
     re.IGNORECASE,
 )
 QTY_BARE_RE = re.compile(
@@ -50,16 +68,23 @@ QTY_BARE_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Indian packaging routinely prints "06 FEB 2027" (DD MON YYYY). The previous
+# pattern required the separator before the year to be a single character and
+# could not accept a space after the day, so that entire format parsed as no
+# date at all - producing a "date of manufacture not declared" contravention
+# against a pack that clearly declares one.
+_DATE_CORE = r"(?:\d{1,2}[\s/\-.]+)?(?:\d{1,2}|[A-Za-z]{3,9})[\s/\-.]+\d{2,4}"
+
 MFG_RE = re.compile(
     r"(?:mfg\.?|mfd\.?|manufactured|packed|pkd\.?|imported)\s*"
     r"(?:on|in|date|dt\.?)?[^A-Za-z0-9]{0,6}"
-    r"((?:\d{1,2}[/\-.])?(?:\d{1,2}|[A-Za-z]{3,9})[/\-.\s]\d{2,4})",
+    rf"({_DATE_CORE})",
     re.IGNORECASE,
 )
 EXPIRY_RE = re.compile(
     r"(?:exp(?:iry|ires)?\.?|best\s*before|use\s*by|bb)\s*"
     r"(?:on|date|dt\.?)?[^A-Za-z0-9]{0,6}"
-    r"((?:\d{1,2}[/\-.])?(?:\d{1,2}|[A-Za-z]{3,9})[/\-.\s]\d{2,4}|\d{1,3}\s*(?:months?|days?))",
+    rf"({_DATE_CORE}|\d{{1,3}}\s*(?:months?|days?))",
     re.IGNORECASE,
 )
 
@@ -94,9 +119,7 @@ POINTER_RE = re.compile(
     re.IGNORECASE,
 )
 
-DATE_TOKEN_RE = re.compile(
-    r"\b((?:\d{1,2}[/\-.])?(?:\d{1,2}|[A-Za-z]{3,9})[/\-.]\d{2,4})\b"
-)
+DATE_TOKEN_RE = re.compile(rf"\b({_DATE_CORE})\b")
 
 CONSUMER_CARE_RE = re.compile(
     r"(?:consumer\s*care|customer\s*care|consumer\s*complaint|helpline|"
@@ -123,7 +146,10 @@ def _normalise_unit(raw: str) -> str | None:
 def _parse_month_year(raw: str) -> str | None:
     """Normalise a date-ish fragment to MM/YYYY where possible."""
     raw = _clean(raw)
-    alpha = re.match(r"([A-Za-z]{3,9})[\s/\-.]+(\d{2,4})", raw)
+    # Search rather than match: in "06 FEB 2027" the month name is not at the
+    # start, and taking the leading digits instead would report the day (06) as
+    # the month, i.e. June instead of February.
+    alpha = re.search(r"([A-Za-z]{3,9})[\s/\-.]+(\d{2,4})", raw)
     if alpha:
         month = MONTHS.get(alpha.group(1)[:3].lower())
         year = alpha.group(2)

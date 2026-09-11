@@ -38,20 +38,36 @@ class SemanticCache:
         self.misses = 0
 
     def load(self, db) -> int:
-        """Warm the in-memory index from persisted entries."""
+        """Warm the in-memory index from persisted entries.
+
+        Entries produced by an earlier analysis version are deleted rather than
+        loaded. The pipeline rejects a stale-version payload anyway, but lookup
+        returns only the single closest match - so leaving one in the index lets
+        it permanently shadow the fresh entry for the same product, and the
+        cache would never hit again after an upgrade.
+        """
         from ..models import CacheEntry
 
+        stale = 0
         with self._lock:
             self._vectors.clear()
             self._entries.clear()
             for row in db.query(CacheEntry).all():
+                payload = row.payload or {}
+                if payload.get("analysis_version") != settings.analysis_version:
+                    db.delete(row)
+                    stale += 1
+                    continue
                 self._vectors.append(np.asarray(row.embedding, dtype=np.float32))
                 self._entries.append({
                     "fingerprint": row.fingerprint,
                     "payload": row.payload,
                     "id": row.id,
                 })
-            return len(self._entries)
+        if stale:
+            db.commit()
+            log.info("Dropped %d cache entry/entries from a previous analysis version", stale)
+        return len(self._entries)
 
     def lookup(self, text: str) -> dict[str, Any] | None:
         """Return a cached verdict for a semantically equivalent label."""

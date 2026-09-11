@@ -7,7 +7,6 @@ scan. Nothing is hardcoded and nothing is redeployed.
 
 from __future__ import annotations
 
-import re
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
@@ -17,7 +16,12 @@ from ..database import get_db
 from ..models import RuleClause
 from ..schemas import RuleClauseOut, RuleClauseIn
 from ..services.cache import cache
-from ..services.pdf_ingest import CLAUSE_SPLIT_RE, _chunks as _pdf_chunks
+from ..services.pdf_ingest import (
+    _normalise as normalise_text,
+    extract_pdf_stream,
+    ingest_text,
+    stem_for,
+)
 from ..services.rag import reindex_from_db, store
 
 router = APIRouter(prefix="/api/rules", tags=["rules"])
@@ -118,49 +122,22 @@ async def upload_policy(file: UploadFile = File(...), db: Session = Depends(get_
         raise HTTPException(415, "Upload a .txt, .md, or .pdf policy document.")
 
     if filename.endswith(".pdf"):
-        import fitz
-        import numpy as np
-        from ..services.ocr import extract as ocr_extract
-
-        raw_text_parts = []
-        doc = fitz.open(stream=await file.read(), filetype="pdf")
-        for page in doc:
-            text = page.get_text().strip()
-            if len(text) < 50:
-                pix = page.get_pixmap()
-                img = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, pix.n)
-                if pix.n == 4:
-                    img = img[:, :, :3]
-                text = ocr_extract(img)["text"]
-            raw_text_parts.append(text)
-        raw = "\n".join(raw_text_parts)
+        raw = extract_pdf_stream(await file.read())
     else:
-        raw = (await file.read()).decode("utf-8", errors="ignore")
+        raw = normalise_text((await file.read()).decode("utf-8", errors="ignore"))
 
     if not raw.strip():
         raise HTTPException(422, "The uploaded document is empty.")
 
-    chunks: list[tuple[str, str]] = _pdf_chunks(raw)
+    stem = stem_for((file.filename or "upload").rsplit(".", 1)[0])
+    created = ingest_text(raw, stem, db, source="admin")
+    if not created:
+        raise HTTPException(
+            422,
+            "No usable clauses were found in this document. It may be a scan with "
+            "no readable text, or its content may already be indexed.",
+        )
 
-    stem = re.sub(r"[^A-Za-z0-9]+", "-", (file.filename or "upload").rsplit(".", 1)[0])[:24]
-    created = 0
-    for number, body in chunks:
-        clause_id = f"UP-{stem}-{number}".replace(" ", "")[:64]
-        if db.query(RuleClause).filter(RuleClause.clause_id == clause_id).first():
-            continue
-        title = body.split(".")[0][:120] or f"Rule {number}"
-        db.add(RuleClause(
-            clause_id=clause_id,
-            rule_number=number,
-            title=title,
-            text=body[:6000],
-            field="general",
-            severity="major",
-            source="admin",
-        ))
-        created += 1
-
-    db.commit()
     indexed = _refresh(db)
     return {
         "filename": file.filename,

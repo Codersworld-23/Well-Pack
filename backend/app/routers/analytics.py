@@ -89,11 +89,24 @@ def analytics(days: int = 30, db: Session = Depends(get_db)):
     )
 
 
+def _openai_sdk_installed() -> bool:
+    """Whether the openai package can be imported in this environment."""
+    from importlib.util import find_spec
+
+    return find_spec("openai") is not None
+
+
 @router.get("/system")
 def system_status(db: Session = Depends(get_db)):
     """Live view of the RAG corpus and semantic cache - shown on the dashboard."""
-    from ..services import ocr
     from ..config import settings
+    from ..services import llm, ocr
+
+    # A key alone is not enough: without the openai SDK importable, every scan
+    # silently falls back to the regex rule engine. Reporting "configured" from
+    # the key alone is what let that failure go unnoticed, so the readiness
+    # check exercises the same path the pipeline uses.
+    llm_ready = llm.available()
 
     return {
         "vector_store": {
@@ -113,9 +126,11 @@ def system_status(db: Session = Depends(get_db)):
         "ocr_engine": ocr.engine_name(),
         "llm": {
             "model": settings.llm_model,
-            "configured": bool(settings.openai_api_key),
+            "configured": llm_ready,
+            "api_key_present": bool(settings.openai_api_key),
+            "sdk_installed": _openai_sdk_installed(),
             "endpoint": settings.openai_base_url,
-            "mode": "rag+llm" if settings.openai_api_key else "rag+rule-engine-fallback",
+            "mode": "rag+llm" if llm_ready else "rag+rule-engine-fallback",
         },
         "database": settings.database_url.split("://")[0],
         "totals": {

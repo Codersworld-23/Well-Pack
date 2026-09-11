@@ -2,6 +2,7 @@ export const API_BASE =
   process.env.NEXT_PUBLIC_API_BASE ?? "http://localhost:8000";
 
 export type Verdict = "compliant" | "partial" | "non_compliant" | "needs_review";
+export type ReportFormat = "pdf" | "docx";
 export type Severity = "critical" | "major" | "minor" | "info";
 
 export interface Violation {
@@ -171,7 +172,15 @@ export interface SystemStatus {
     backend: string;
   };
   ocr_engine: string;
-  llm: { model: string; configured: boolean; mode: string };
+  llm: {
+    model: string;
+    /** True only when a key is set AND the openai SDK is importable. */
+    configured: boolean;
+    api_key_present?: boolean;
+    sdk_installed?: boolean;
+    endpoint?: string;
+    mode: string;
+  };
   database: string;
   totals: { scans: number; reports: number; clauses: number };
 }
@@ -233,6 +242,44 @@ export const api = {
   },
 
   rescan: (id: string) => request<ScanResult>(`/api/scans/${id}/rescan`, { method: "POST" }),
+
+  /**
+   * Download a scan's compliance report.
+   *
+   * `pdf` is the fixed-layout report for filing; `docx` is the same content as
+   * an editable Word document so an officer can revise it before issuing.
+   * Fetched as a blob rather than navigated to, so a failure surfaces as an
+   * error message instead of a blank tab.
+   */
+  downloadReport: async (id: string, format: ReportFormat = "pdf") => {
+    const response = await fetch(`${API_BASE}/api/scans/${id}/report?format=${format}`, {
+      cache: "no-store",
+    });
+    if (!response.ok) {
+      let detail = `Report generation failed (${response.status})`;
+      try {
+        detail = (await response.json()).detail ?? detail;
+      } catch {
+        /* non-JSON error body */
+      }
+      throw new Error(detail);
+    }
+
+    const disposition = response.headers.get("content-disposition") ?? "";
+    const match = disposition.match(/filename="?([^"]+)"?/);
+    const filename = match?.[1] ?? `wellpack-compliance-${id}.${format}`;
+
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = filename;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    URL.revokeObjectURL(url);
+    return filename;
+  },
 
   deleteScan: (id: string) => request<void>(`/api/scans/${id}`, { method: "DELETE" }),
 

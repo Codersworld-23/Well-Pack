@@ -45,7 +45,12 @@ class Settings:
     openai_base_url = openai_base_url.rstrip("/")
     llm_model: str = os.getenv("OPENAI_MODEL", os.getenv("LLM_MODEL", "gpt-4o-mini"))
     llm_timeout_seconds: float = float(os.getenv("LLM_TIMEOUT_SECONDS", "45"))
-    analysis_version: str = os.getenv("ANALYSIS_VERSION", "rag-llm-v1")
+    # Bump whenever the analysis changes meaningfully: the semantic cache only
+    # reuses a verdict whose analysis_version matches, so this is what stops
+    # verdicts produced by the previous logic from being served after an upgrade.
+    # v2: LLM decides (was silently falling back to the regex engine), retrieval
+    # augmented with every governing clause, OCR-damage-tolerant extraction.
+    analysis_version: str = os.getenv("ANALYSIS_VERSION", "rag-llm-v2")
 
     # --- vision ---------------------------------------------------------
     blur_threshold: float = float(os.getenv("BLUR_THRESHOLD", "55.0"))
